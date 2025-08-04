@@ -25,7 +25,8 @@ from PyPDF2.errors import PdfReadError
 from pdf2image import convert_from_path
 from PIL import Image as PILImage
 import pytesseract
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Image as ReportLabImage
 from reportlab.lib.styles import getSampleStyleSheet

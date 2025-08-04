@@ -1,3 +1,4 @@
 cache/
 uploads/
 frontend/node_modules/
+venv/
