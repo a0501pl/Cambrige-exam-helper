@@ -25,8 +25,8 @@ from PyPDF2.errors import PdfReadError
 from pdf2image import convert_from_path
 from PIL import Image as PILImage
 import pytesseract
-from google import genai
-from google.genai import types
+# This is the correct import for the currently available library
+import google.generativeai as genai
 
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Image as ReportLabImage
 from reportlab.lib.styles import getSampleStyleSheet
@@ -38,7 +38,7 @@ from reportlab.lib.enums import TA_CENTER
 # ==============================================================================
 # --- Version & Configuration ---
 # ==============================================================================
-print("--- Running app.py version: v102 (Final Schema Fix) ---")
+print("--- Running app.py version: v104 (Confirmed GenAI Import Correction) ---")
 
 class Config:
     """Centralized configuration for the application."""
@@ -224,7 +224,6 @@ def classify_pages_in_batch_ai(image_paths_dict):
         for page_num, path in sorted(image_paths_dict.items()):
             try:
                 with open(path, "rb") as image_file:
-                    # FIX: Pass raw bytes to from_data, not base64 encoded string.
                     image_bytes = image_file.read()
                     prompt_parts.append(genai.types.Part.from_data(
                         data=image_bytes,
@@ -438,9 +437,6 @@ def generate_question():
     7. The model answer MUST be a point-based marking scheme (e.g., M1, A1, B1).
     Respond in JSON format only.
     """
-    # THE FIX: The `type` for `diagram_spec` must be a single string, not a list.
-    # The prompt instructs the AI to return `null` for the whole field if not needed,
-    # which the JSON parser will handle correctly.
     schema = {
         "type": "OBJECT",
         "properties": {
@@ -448,7 +444,7 @@ def generate_question():
             "model_answer": {"type": "STRING"},
             "diagram_spec": {
                 "type": "OBJECT",
-                "nullable": True, # Indicates the object itself can be null
+                "nullable": True,
                 "properties": {
                     "type": {"type": "STRING"}, "title": {"type": "STRING"}, "x_label": {"type": "STRING"}, "y_label": {"type": "STRING"},
                     "data": {"type": "ARRAY", "items": {"type": "ARRAY", "items": {"type": "NUMBER"}}}
@@ -464,7 +460,6 @@ def generate_question():
     diagram_image_b64 = None
     diagram_spec = result.get('diagram_spec')
     
-    # Check if diagram_spec is a dictionary and has the required keys for plotting
     if isinstance(diagram_spec, dict) and diagram_spec.get('type') == 'graph' and diagram_spec.get('data'):
         try:
             fig, ax = plt.subplots(figsize=(6, 4), dpi=100)
