@@ -38,7 +38,7 @@ from reportlab.lib.enums import TA_CENTER
 # ==============================================================================
 # --- Version & Configuration ---
 # ==============================================================================
-print("--- Running app.py version: v104 (Confirmed GenAI Import Correction) ---")
+print("--- Running app.py version: v107 (Smarter question extraction with pre-classification) ---")
 
 class Config:
     """Centralized configuration for the application."""
@@ -162,7 +162,6 @@ def get_json_from_ai_with_retry(prompt, schema, temperature=0.2, model_type='tex
         logging.error("AI call attempted but no valid API key is configured.")
         return None
 
-    # For multi-part prompts (with images), it's safest to ensure it's a tuple.
     if isinstance(prompt, list):
         prompt = tuple(prompt)
 
@@ -189,7 +188,7 @@ def get_json_from_ai_with_retry(prompt, schema, temperature=0.2, model_type='tex
                 logging.warning(f"AI call with key index {current_key_index_for_attempt} returned invalid content.")
             except Exception as e:
                 logging.error(f"Exception on AI call with key index {current_key_index_for_attempt}: {e}")
-                logging.error(traceback.format_exc()) # Keep detailed traceback for debugging
+                logging.error(traceback.format_exc())
                 if '429' in str(e) or 'rate limit' in str(e).lower():
                     logging.warning(f"Rate limit on key index {current_key_index_for_attempt}. Trying next key.")
 
@@ -207,28 +206,25 @@ def classify_pages_in_batch_ai(image_paths_dict):
         logging.info(f"AI analyzing {len(image_paths_dict)} pages in a single batch...")
 
         prompt_parts = [
-            genai.types.Part.from_text("""
-            Analyze the following sequence of exam paper pages. For each page, classify its content into one category:
+            """
+            Analyze the following sequence of exam paper pages, which are explicitly labeled. For each page, classify its content into one category:
             - "question": Contains exam questions.
             - "formula_sheet": A list of formulas, data, or constants.
             - "periodic_table": A periodic table.
             - "instructions": Exam instructions.
             - "blank": Blank or only headers/footers.
 
-            Your response must be a JSON object with a single key "classifications", which is an array of objects.
-            Each object must have "page_number" (integer) and "page_type" (string category).
+            Your response must be a JSON object with a single key "classifications".
+            The value of "classifications" must be an array of objects.
+            Each object must have two keys: "page_number" (the integer I provide) and "page_type" (the string category you determine).
             Process all images provided.
-            """)
+            """
         ]
 
         for page_num, path in sorted(image_paths_dict.items()):
             try:
-                with open(path, "rb") as image_file:
-                    image_bytes = image_file.read()
-                    prompt_parts.append(genai.types.Part.from_data(
-                        data=image_bytes,
-                        mime_type="image/png"
-                    ))
+                prompt_parts.append(f"--- Analyzing Page {page_num} ---")
+                prompt_parts.append(PILImage.open(path))
             except Exception as img_read_err:
                 logging.error(f"Failed to read image {path}: {img_read_err}")
                 continue
@@ -255,7 +251,7 @@ def classify_pages_in_batch_ai(image_paths_dict):
 
         if result and 'classifications' in result:
             classification_map = {item['page_number']: item['page_type'] for item in result['classifications']}
-            logging.info(f"AI batch classification successful: {classification_map}")
+            logging.info(f"AI batch classification successful for {len(classification_map)} pages: {classification_map}")
             return classification_map
 
     except Exception as e:
@@ -328,15 +324,37 @@ def ocr_specific_pages(image_paths, start_page=0):
 def _download_and_process_pdf_for_extraction(file_info, temp_dir):
     pdf_path = _download_single_pdf(file_info)
     if not pdf_path: return None
-    page_images = extract_text_and_images(pdf_path, temp_dir)
-    full_text = ocr_specific_pages(page_images, start_page=app.config['PAGES_TO_IGNORE_FOR_PDF_OUTPUT'])
-    return {"filename": os.path.basename(pdf_path), "full_text": full_text, "page_images": page_images}
+    
+    # 1. Convert all pages to images first
+    all_page_images = extract_text_and_images(pdf_path, temp_dir)
+    if not all_page_images:
+        logging.warning(f"No images extracted from {pdf_path}, skipping.")
+        return None
+
+    # 2. Classify all pages using AI to identify which ones contain questions
+    page_classifications = classify_pages_in_batch_ai(all_page_images)
+
+    # 3. Create a dictionary of only the pages that are classified as 'question'
+    question_page_images = {
+        p_num: img_path
+        for p_num, img_path in all_page_images.items()
+        if page_classifications.get(p_num) == 'question'
+    }
+    
+    logging.info(f"Identified {len(question_page_images)} question pages in {os.path.basename(pdf_path)} for OCR.")
+
+    # 4. Perform OCR *only* on the filtered question pages
+    # This creates a clean text block without instructions, formula sheets, etc.
+    full_text = ocr_specific_pages(question_page_images, start_page=app.config['PAGES_TO_IGNORE_FOR_PDF_OUTPUT'])
+    
+    # Return the clean text, but also the original map of *all* images so we can retrieve them later
+    return {"filename": os.path.basename(pdf_path), "full_text": full_text, "page_images": all_page_images}
 
 def parse_all_questions_from_text(full_text):
     main_question_start_regex = re.compile(r'^\s*(?:Question\s)?(\d{1,2})[\s\.\(]', re.MULTILINE | re.IGNORECASE)
     matches = list(main_question_start_regex.finditer(full_text))
     if not matches:
-        logging.warning("No question numbers found with the regex.")
+        logging.warning("No question numbers found with the regex in the cleaned OCR text.")
         return []
 
     extracted_questions = []
@@ -345,6 +363,7 @@ def parse_all_questions_from_text(full_text):
         end_index = matches[i + 1].start() if i + 1 < len(matches) else len(full_text)
         question_text_block = full_text[start_index:end_index].strip()
 
+        # The page numbers are correctly extracted from the text block of each question
         pages = sorted(list(set(map(int, re.findall(r'--- PDF Page (\d+) ---', question_text_block)))))
 
         if len(question_text_block) > 25:
@@ -353,7 +372,7 @@ def parse_all_questions_from_text(full_text):
             extracted_questions.append({
                 "question_number": question_number,
                 "text": question_text_block,
-                "pages": pages if pages else [1]
+                "pages": pages if pages else [1] # Fallback, though should not be needed
             })
     return extracted_questions
 
@@ -379,7 +398,7 @@ Your task is to analyze the full OCR text of a past paper and identify ONLY the 
 -   Each string in the array must be a question number that is BOTH relevant AND complete.
 -   If no questions meet both criteria, you MUST return an empty array. You will be penalized for including irrelevant or incomplete questions.
 
-**Full OCR Text of the Paper:**
+**Full OCR Text of the Paper (pre-filtered to only include question pages):**
 ---
 {full_text[:24000]}
 ---
