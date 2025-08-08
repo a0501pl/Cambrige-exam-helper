@@ -19,8 +19,8 @@ body {
     z-index: 0; /* Place it behind all other content */
     background-color: #2c3e50; /* A dark desaturated blue fallback */
     background-image:
-        linear-gradient(rgba(70, 96, 115, 0.4) 1px, transparent 1px), /* Lighter, more defined grid lines */
-        linear-gradient(90deg, rgba(70, 96, 115, 0.4) 1px, transparent 1px); /* Lighter, more defined grid lines */
+        linear-gradient(rgba(70, 96, 115, 0.4) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(70, 96, 115, 0.4) 1px, transparent 1px);
     background-size: 40px 40px;
     animation: pan-background 90s linear infinite;
 }
@@ -36,23 +36,22 @@ body {
 
 /* --- Styles for Markdown Content --- */
 .markdown-container {
-    word-break: break-word; /* **FIX**: Prevents text from overflowing its container */
+    word-break: break-word;
 }
 
 .markdown-container p {
-    margin-bottom: 1rem; /* Adds space after each paragraph (e.g., after (a), (b)) */
+    margin-bottom: 1rem;
 }
 
 .markdown-container ul, .markdown-container ol {
     margin-bottom: 1rem;
-    padding-left: 2rem; /* Standard list indentation */
+    padding-left: 2rem;
 }
 
 .markdown-container li {
-    margin-bottom: 0.5rem; /* Space between list items */
+    margin-bottom: 0.5rem;
 }
 
-/* Ensure Katex display math has space */
 .katex-display {
     margin-top: 1em;
     margin-bottom: 1em;

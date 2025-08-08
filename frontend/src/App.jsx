@@ -5,10 +5,8 @@ import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import 'katex/dist/katex.min.css';
 
-// Backend URL configuration
 const BACKEND_URL = 'http://localhost:10000';
 
-// --- Error Boundary (to prevent crashes) ---
 class ErrorBoundary extends React.Component {
     constructor(props) { super(props); this.state = { hasError: false }; }
     static getDerivedStateFromError(error) { return { hasError: true }; }
@@ -26,8 +24,8 @@ class ErrorBoundary extends React.Component {
     }
 }
 
-// --- Other Components ---
 const Background = () => <div className="grid-background"></div>;
+
 const TrueFocus = ({ children, glowColor = 'rgba(167, 139, 250, 0.5)' }) => {
     const [isFocused, setIsFocused] = useState(false);
     const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -46,12 +44,14 @@ const TrueFocus = ({ children, glowColor = 'rgba(167, 139, 250, 0.5)' }) => {
         </div>
     );
 };
+
 const Message = ({ type, message }) => {
     if (!message) return null;
     const baseClasses = "message p-3 rounded-lg mt-4 font-medium";
     const typeClasses = type === "success" ? "bg-emerald-100 text-emerald-800 border border-emerald-300" : "bg-red-100 text-red-800 border border-red-300";
     return <div className={`${baseClasses} ${typeClasses}`}>{message}</div>;
 };
+
 const SubjectSelector = ({ subjectCodes, level, onLevelChange, subjectCode, onSubjectCodeChange, idPrefix }) => {
     const handleLevelSelect = (e) => { onLevelChange(e.target.value); onSubjectCodeChange(''); };
     const currentSubjects = subjectCodes?.[level?.toLowerCase()] || {};
@@ -80,7 +80,6 @@ const SubjectSelector = ({ subjectCodes, level, onLevelChange, subjectCode, onSu
     );
 };
 
-// --- COMPONENT: PastPaperCompiler ---
 const PastPaperCompiler = ({ subjectCodes }) => {
     const [level, setLevel] = useState('');
     const [subjectCode, setSubjectCode] = useState('');
@@ -91,15 +90,13 @@ const PastPaperCompiler = ({ subjectCodes }) => {
     const [successMessage, setSuccessMessage] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
     const [removeBlank, setRemoveBlank] = useState(true);
-    const [ignoreFirst, setIgnoreFirst] = useState(0); // FIX: Default changed to 0
-    
-    // NEW: State for removing additional page types
+    const [ignoreFirst, setIgnoreFirst] = useState(0);
     const [removePageTypes, setRemovePageTypes] = useState(['formula_sheet', 'instructions']);
+    const [includeMarkSchemes, setIncludeMarkSchemes] = useState(false);
 
     const handleYearChange = (year) => setYears(p => p.includes(year) ? p.filter(y => y !== year) : [...p, year].sort());
     const handleSessionChange = (session) => setSessions(p => p.includes(session) ? p.filter(s => s !== session) : [...p, session].sort());
     
-    // NEW: Handler for the new checkboxes
     const handleRemoveTypeChange = (type) => {
         setRemovePageTypes(prev => 
             prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
@@ -128,12 +125,17 @@ const PastPaperCompiler = ({ subjectCodes }) => {
                     sessions,
                     remove_blank_pages: removeBlank,
                     ignore_first_pages: ignoreFirst,
-                    remove_page_types: removePageTypes, // NEW: Send this to the backend
+                    remove_page_types: removePageTypes,
+                    include_mark_schemes: includeMarkSchemes,
                 }),
             });
             if (response.headers.get("content-type")?.includes("application/json")) {
                 const data = await response.json();
-                setErrorMessage(data.message || 'Failed to generate paper.');
+                if (response.status === 202) {
+                    setSuccessMessage(data.message);
+                } else {
+                    setErrorMessage(data.message || 'Failed to generate paper.');
+                }
             } else if (response.ok) {
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
@@ -144,7 +146,8 @@ const PastPaperCompiler = ({ subjectCodes }) => {
                 a.click();
                 a.remove();
                 window.URL.revokeObjectURL(url);
-                setSuccessMessage('Paper compiled and downloaded!');
+                const processingMessage = response.headers.get('X-Processing-Message');
+                setSuccessMessage(processingMessage || 'Paper compiled and downloaded!');
             } else {
                 setErrorMessage(`Download failed: ${await response.text() || response.statusText}`);
             }
@@ -173,7 +176,6 @@ const PastPaperCompiler = ({ subjectCodes }) => {
                     <input type="text" id="component_codes" value={componentCodes} onChange={(e) => setComponentCodes(e.target.value)} placeholder="e.g., 11,12,21" required className="w-full p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-gray-900" />
                 </div>
                 
-                {/* NEW: Updated Processing Options section */}
                 <div>
                     <label className="block text-gray-800 text-sm font-medium mb-2">Processing Options:</label>
                     <div className="space-y-4 bg-gray-50 p-4 rounded-lg border">
@@ -203,6 +205,12 @@ const PastPaperCompiler = ({ subjectCodes }) => {
                                     </label>
                                 ))}
                             </div>
+                        </div>
+                        <div className="border-t pt-4">
+                             <label className="flex items-center cursor-pointer">
+                                <input type="checkbox" checked={includeMarkSchemes} onChange={(e) => setIncludeMarkSchemes(e.target.checked)} className="form-checkbox h-5 w-5 text-indigo-600 rounded" />
+                                <span className="ml-2 text-gray-900 font-semibold">Include Mark Schemes</span>
+                            </label>
                         </div>
                     </div>
                 </div>
@@ -239,7 +247,6 @@ const PastPaperCompiler = ({ subjectCodes }) => {
     );
 };
 
-// --- COMPONENT: TopicalQuestionSelector ---
 const TopicalQuestionSelector = ({ subjectCodes }) => {
     const [level, setLevel] = useState('');
     const [subjectCode, setSubjectCode] = useState('');
@@ -261,31 +268,20 @@ const TopicalQuestionSelector = ({ subjectCodes }) => {
     const [correctedAnswer, setCorrectedAnswer] = useState('');
 
     const resetAllState = () => {
-        setQuestion('');
-        setModelAnswer('');
-        setDiagramImage(null);
-        setUserAnswer('');
-        setQuestionSuccessMessage('');
-        setQuestionErrorMessage('');
-        setMarkedScore(null);
-        setMarkingBreakdown('');
-        setFeedbackStrengths('');
-        setFeedbackImprovements('');
-        setCorrectedAnswer('');
-        setMarkingSuccessMessage('');
-        setMarkingErrorMessage('');
+        setQuestion(''); setModelAnswer(''); setDiagramImage(null); setUserAnswer('');
+        setQuestionSuccessMessage(''); setQuestionErrorMessage(''); setMarkedScore(null);
+        setMarkingBreakdown(''); setFeedbackStrengths(''); setFeedbackImprovements('');
+        setCorrectedAnswer(''); setMarkingSuccessMessage(''); setMarkingErrorMessage('');
     };
 
     const handleGenerateQuestion = useCallback(async (e) => {
         e.preventDefault();
         setQuestionLoading(true);
         resetAllState();
-
         if (!level || !subjectCode || !topic.trim()) {
             setQuestionErrorMessage('Please select a Level, Subject, and enter a Topic.');
             setQuestionLoading(false); return;
         }
-
         try {
             const response = await fetch(`${BACKEND_URL}/generate_question`, {
                 method: 'POST',
@@ -320,14 +316,7 @@ const TopicalQuestionSelector = ({ subjectCodes }) => {
             const response = await fetch(`${BACKEND_URL}/mark_answer`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    question,
-                    user_answer: userAnswer,
-                    model_answer: modelAnswer,
-                    subject_code: subjectCode,
-                    topic,
-                    level
-                }),
+                body: JSON.stringify({ question, user_answer: userAnswer, model_answer: modelAnswer }),
             });
             const data = await response.json();
             if (response.ok && data.success) {
@@ -336,9 +325,6 @@ const TopicalQuestionSelector = ({ subjectCodes }) => {
                 if (data.feedback) {
                     setFeedbackStrengths(data.feedback.strengths || '');
                     setFeedbackImprovements(data.feedback.improvements || '');
-                } else {
-                    setFeedbackStrengths('');
-                    setFeedbackImprovements('No specific feedback was provided by the examiner.');
                 }
                 setCorrectedAnswer(data.corrected_answer || '');
                 setMarkingSuccessMessage('Answer marked successfully!');
@@ -350,7 +336,7 @@ const TopicalQuestionSelector = ({ subjectCodes }) => {
         } finally {
             setMarkingLoading(false);
         }
-    }, [question, userAnswer, modelAnswer, subjectCode, topic, level]);
+    }, [question, userAnswer, modelAnswer]);
     
     const totalMarks = (q) => (q.match(/\[(\d+)\]/g) || []).reduce((sum, mark) => sum + parseInt(mark.slice(1, -1)), 0);
 
@@ -381,11 +367,7 @@ const TopicalQuestionSelector = ({ subjectCodes }) => {
                                 <img src={`data:image/png;base64,${diagramImage}`} alt="Diagram for the question" className="max-w-full h-auto rounded" />
                             </div>
                         )}
-                        <ReactMarkdown
-                          remarkPlugins={[remarkMath, remarkGfm]}
-                          rehypePlugins={[rehypeKatex]}
-                          className="markdown-container text-gray-900"
-                        >
+                        <ReactMarkdown remarkPlugins={[remarkMath, remarkGfm]} rehypePlugins={[rehypeKatex]} className="markdown-container text-gray-900">
                           {(question || '').replace(/\\n/g, '\n')}
                         </ReactMarkdown>
                     </ErrorBoundary>
@@ -406,12 +388,6 @@ const TopicalQuestionSelector = ({ subjectCodes }) => {
                             <h3 className="text-xl font-semibold text-purple-800 mb-4">Examiner Feedback:</h3>
                             <ErrorBoundary>
                                 <p className="text-2xl font-bold text-purple-700 mb-4">Score: {markedScore} / {totalMarks(question)}</p>
-                                {markingBreakdown && (
-                                    <div className="mb-4">
-                                        <h4 className="font-semibold text-purple-700">Marking Breakdown:</h4>
-                                        <ReactMarkdown remarkPlugins={[remarkMath, remarkGfm]} rehypePlugins={[rehypeKatex]} className="markdown-container text-gray-900">{markingBreakdown}</ReactMarkdown>
-                                    </div>
-                                )}
                                 {feedbackStrengths && (
                                     <div className="mb-4"><h4 className="font-semibold text-purple-700">Strengths:</h4><ReactMarkdown remarkPlugins={[remarkMath, remarkGfm]} rehypePlugins={[rehypeKatex]} className="markdown-container text-gray-900">{feedbackStrengths}</ReactMarkdown></div>
                                 )}
@@ -433,7 +409,6 @@ const TopicalQuestionSelector = ({ subjectCodes }) => {
     );
 };
 
-// --- COMPONENT: ExtractedQuestionSelector ---
 const ExtractedQuestionSelector = ({ subjectCodes }) => {
     const [level, setLevel] = useState('');
     const [subjectCode, setSubjectCode] = useState('');
@@ -462,7 +437,11 @@ const ExtractedQuestionSelector = ({ subjectCodes }) => {
             });
             if (response.headers.get("content-type")?.includes("application/json")) {
                 const data = await response.json();
-                setErrorMessage(data.message || 'Failed to generate extracted paper.');
+                if (response.status === 202) {
+                    setSuccessMessage(data.message);
+                } else {
+                    setErrorMessage(data.message || 'Failed to generate extracted paper.');
+                }
             } else if (response.ok) {
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
@@ -471,7 +450,8 @@ const ExtractedQuestionSelector = ({ subjectCodes }) => {
                 a.download = `extracted_questions_${subjectCode}_${topic}.pdf`;
                 document.body.appendChild(a); a.click(); a.remove();
                 window.URL.revokeObjectURL(url);
-                setSuccessMessage('Extracted questions PDF downloaded successfully!');
+                const processingMessage = response.headers.get('X-Processing-Message');
+                setSuccessMessage(processingMessage || 'Extracted questions PDF downloaded successfully!');
             } else {
                 setErrorMessage(`Download failed: ${await response.text() || response.statusText}`);
             }
@@ -518,13 +498,30 @@ const ExtractedQuestionSelector = ({ subjectCodes }) => {
     );
 };
 
-
-// --- COMPONENT: App ---
 function App() {
-    const [activeTab, setActiveTab] = useState('compiler'); // Default to compiler
+    const [activeTab, setActiveTab] = useState('compiler');
     const [fetchedSubjectCodes, setFetchedSubjectCodes] = useState({ igcse: {}, alevel: {} });
     const [loadingSubjects, setLoadingSubjects] = useState(true);
     const [subjectError, setSubjectError] = useState('');
+    const [cacheMessage, setCacheMessage] = useState('');
+
+    const handleClearCache = async () => {
+        if (window.confirm("Are you sure you want to clear the server cache? This will force all papers to be re-downloaded and re-processed on the next request.")) {
+            try {
+                setCacheMessage('Clearing cache...');
+                const response = await fetch(`${BACKEND_URL}/clear_cache`, { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    setCacheMessage('Cache cleared successfully!');
+                } else {
+                    setCacheMessage(`Failed to clear cache: ${data.message}`);
+                }
+            } catch (error) {
+                setCacheMessage('Error connecting to server to clear cache.');
+            }
+            setTimeout(() => setCacheMessage(''), 4000);
+        }
+    };
 
     useEffect(() => {
         const fetchSubjects = async () => {
@@ -589,6 +586,17 @@ function App() {
                     {activeTab === 'topical' && <TopicalQuestionSelector subjectCodes={fetchedSubjectCodes} />}
                     {activeTab === 'extracted' && <ExtractedQuestionSelector subjectCodes={fetchedSubjectCodes} />}
                 </main>
+
+                <footer className="mt-12 w-full max-w-2xl text-center">
+                    <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl">
+                        <h3 className="font-semibold text-gray-200 mb-2">Cache Management</h3>
+                        <p className="text-xs text-gray-400 mb-3">If papers are not processing correctly, clearing the cache may help.</p>
+                        <button onClick={handleClearCache} className="py-2 px-4 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50">
+                            Clear Server Cache
+                        </button>
+                        {cacheMessage && <p className="text-sm mt-2 text-gray-300">{cacheMessage}</p>}
+                    </div>
+                </footer>
             </div>
         </>
     );

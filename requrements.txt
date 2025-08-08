@@ -1,0 +1,11 @@
+Flask
+Flask-Cors
+google-generativeai
+matplotlib
+pdf2image
+Pillow
+PyPDF2
+pytesseract
+reportlab
+requests
+waitress
