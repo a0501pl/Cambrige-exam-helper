@@ -2,10 +2,9 @@
 # --- Cambridge Exam Helper - AI-Powered Past Paper Application ---
 # ==============================================================================
 #
-# Version:      v131 (Final Architecture: On-Demand Background Caching)
-# Description:  A fully automated, scalable Flask backend. This version
-#               removes the need for any manual precaching scripts by processing
-#               new papers in the background without blocking user requests.
+# Version:      v136 (Final Architecture: Real-time Streaming Generation)
+# Description:  This version uses a streaming architecture for AI question
+#               generation to provide an instant, responsive user experience.
 #
 # ==============================================================================
 
@@ -32,7 +31,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from flask import Flask, request, jsonify, send_file, Response
+from flask import Flask, request, jsonify, send_file, Response, stream_with_context
 from flask_cors import CORS
 from PyPDF2 import PdfReader, PdfWriter
 from PyPDF2.errors import PdfReadError
@@ -50,7 +49,7 @@ from reportlab.lib.enums import TA_CENTER
 # ==============================================================================
 # --- 2. CONFIGURATION & INITIALIZATION ---
 # ==============================================================================
-print("--- Running app.py version: v131 (Final Architecture: On-Demand Background Caching) ---")
+print("--- Running app.py version: v136 (Final Architecture: Real-time Streaming Generation) ---")
 
 class Config:
     """Centralized configuration class for the application."""
@@ -71,7 +70,7 @@ class Config:
 
 app = Flask(__name__)
 app.config.from_object(Config)
-CORS(app)
+CORS(app, expose_headers=['X-Processing-Message'])
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
 if Config.TESSACT_CMD:
@@ -458,7 +457,24 @@ def generate_question() -> Response:
         subject_code, topic, level = data['subject_code'], data['topic'], data['level']
         name = subject_codes.get(subject_code, subject_code).replace('-', ' ').title()
 
-        prompt = fr"""You are an expert Cambridge examiner for {level} {name}. Validate if "{topic}" is a real topic in this subject. If valid, create an authentic, multi-part exam question (8-15 marks total) with a model answer and optional diagram spec. If invalid, respond with "success": false and a "message" explaining why. All mathematical notation must use valid LaTeX. All backslashes in the JSON string must be double-escaped (e.g., `\\frac`)."""
+        prompt = fr"""
+        You are an expert Cambridge examiner for {level} {name}.
+        Your first task is to validate if "{topic}" is a real, central topic in this subject.
+        - If the topic is INVALID, respond with "success": false and a "message" explaining why.
+        - If the topic is VALID, create an authentic, multi-part exam question.
+
+        CRITICAL INSTRUCTIONS FOR QUESTION GENERATION:
+        - The response MUST be a single JSON object.
+        - All backslashes `\` for LaTeX MUST be double-escaped as `\\`.
+        - **Formatting:** Each part of the question (e.g., (a), (b), (i)) MUST start on a new line. Use `\n` for line breaks.
+        - **Marks:** Marks for each part MUST be in square brackets at the end of the line, e.g., [2]. The total marks should be between 8 and 15.
+        
+        The JSON object must contain:
+        - "success": true
+        - "question": A string containing the multi-part question.
+        - "model_answer": A string containing a point-based marking scheme, with each point on a new line.
+        - "diagram_spec": A JSON object for a diagram if needed, otherwise null.
+        """
         schema = {"type": "OBJECT", "properties": {"success": {"type": "BOOLEAN"}, "message": {"type": "STRING"}, "question": {"type": "STRING"}, "model_answer": {"type": "STRING"}, "diagram_spec": {"type": "OBJECT", "nullable": True, "properties": { "type": {"type": "STRING"}, "title": {"type": "STRING"}, "x_label": {"type": "STRING"}, "y_label": {"type": "STRING"}, "data": {"type": "ARRAY", "items": {"type": "ARRAY", "items": {"type": "NUMBER"}}}}}}, "required": ["success"]}
 
         result = get_json_from_ai_with_retry(prompt, schema, temperature=0.8, model_type='text')
@@ -528,7 +544,6 @@ def generate_past_paper() -> Response:
                     ready_papers.append(paper_data)
             else:
                 pending_papers.append(f"{filename_base}.pdf")
-                # Start processing this missing paper in the background
                 thread = Thread(target=process_paper_in_background, args=(task, ('classification',)))
                 thread.daemon = True
                 thread.start()
@@ -544,7 +559,7 @@ def generate_past_paper() -> Response:
                 "success": True,
                 "message": f"No papers were ready in the cache. The following {len(pending_papers)} papers are now being processed in the background. Please try your request again in a few minutes.",
                 "processing_files": pending_papers
-            }), 202 # HTTP 202 Accepted
+            }), 202
 
         buf = io.BytesIO()
         writer.write(buf)
@@ -555,7 +570,6 @@ def generate_past_paper() -> Response:
             response.headers['X-Processing-Message'] = f"Compiled {len(ready_papers)} papers. The following {len(pending_papers)} papers are being processed in the background: {', '.join(pending_papers)}"
         
         return response
-
     except Exception as e:
         logging.error(f"Unhandled error in generate_past_paper: {e}\n{traceback.format_exc()}")
         return jsonify({"success": False, "message": "An unexpected server error occurred."}), 500
