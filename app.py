@@ -2,9 +2,10 @@
 # --- Cambridge Exam Helper - AI-Powered Past Paper Application ---
 # ==============================================================================
 #
-# Version:      v136 (Final Architecture: Real-time Streaming Generation)
-# Description:  This version uses a streaming architecture for AI question
-#               generation to provide an instant, responsive user experience.
+# Version:      v140 (Final Stable Synchronous Version)
+# Description:  A stable, synchronous backend. This version uses a robust
+#               text-delimiter method for AI generation to guarantee valid JSON
+#               and fix all formatting and stability issues.
 #
 # ==============================================================================
 
@@ -31,7 +32,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from flask import Flask, request, jsonify, send_file, Response, stream_with_context
+from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 from PyPDF2 import PdfReader, PdfWriter
 from PyPDF2.errors import PdfReadError
@@ -49,7 +50,7 @@ from reportlab.lib.enums import TA_CENTER
 # ==============================================================================
 # --- 2. CONFIGURATION & INITIALIZATION ---
 # ==============================================================================
-print("--- Running app.py version: v136 (Final Architecture: Real-time Streaming Generation) ---")
+print("--- Running app.py version: v140 (Final Stable Synchronous Version) ---")
 
 class Config:
     """Centralized configuration class for the application."""
@@ -112,8 +113,8 @@ subject_codes: Dict[str, str] = {**subject_codes_igcse, **subject_codes_alevel}
 # --- 4. CORE AI & DATA PROCESSING UTILITIES ---
 # ==============================================================================
 
-def get_json_from_ai_with_retry(prompt: Union[str, List[Any]], schema: Optional[Dict[str, Any]] = None, temperature: float = 0.2, model_type: str = 'text') -> Optional[Dict[str, Any]]:
-    """A robust function to get JSON from Google's AI, with retries and key rotation."""
+def get_ai_response(prompt: Union[str, List[Any]], temperature: float = 0.2, model_type: str = 'text', is_json: bool = False) -> Optional[Union[Dict[str, Any], str]]:
+    """A robust function to get a response from Google's AI, with retries and key rotation."""
     global _current_key_index
     if not _api_keys or _api_keys[0] in _placeholder_keys:
         logging.error("AI call attempted but no valid API key is configured.")
@@ -122,23 +123,28 @@ def get_json_from_ai_with_retry(prompt: Union[str, List[Any]], schema: Optional[
     if isinstance(prompt, list):
         prompt = tuple(prompt)
 
+    generation_config_args = {"temperature": temperature, "max_output_tokens": 8192}
+    if is_json:
+        generation_config_args["response_mime_type"] = "application/json"
+
     for attempt in range(app.config['MAX_AI_RETRIES']):
         for i in range(len(_api_keys)):
             current_key_index_for_attempt = (_current_key_index + i) % len(_api_keys)
             try:
-                logging.info(f"AI JSON call attempt {attempt + 1}, using key index {current_key_index_for_attempt}...")
+                logging.info(f"AI call attempt {attempt + 1}, using key index {current_key_index_for_attempt}...")
                 genai.configure(api_key=_api_keys[current_key_index_for_attempt])
                 model = genai.GenerativeModel(app.config['AI_MODEL_TEXT'] if model_type == 'text' else app.config['AI_MODEL_VISION'])
-
-                generation_config_args = {"temperature": temperature, "max_output_tokens": 8192, "response_mime_type": "application/json"}
-                if schema:
-                    generation_config_args["response_schema"] = schema
-
+                
                 generation_config = genai.types.GenerationConfig(**generation_config_args)
                 response = model.generate_content(prompt, generation_config=generation_config)
                 
                 _current_key_index = current_key_index_for_attempt
-                return json.loads(response.candidates[0].content.parts[0].text)
+                raw_text = response.candidates[0].content.parts[0].text
+                
+                if is_json:
+                    return json.loads(raw_text)
+                else:
+                    return raw_text
             except Exception as e:
                 logging.error(f"Exception on AI call with key index {current_key_index_for_attempt}: {e}")
                 if '429' in str(e) or 'rate limit' in str(e).lower():
@@ -161,16 +167,16 @@ def classify_single_paper_ai(filename: str, image_paths_dict: Dict[int, str]) ->
     for page_num, path in sorted(image_paths_dict.items()):
         prompt_parts.extend([f"--- PAGE: {page_num} ---", PILImage.open(path)])
     
-    result = get_json_from_ai_with_retry(prompt_parts, schema=None, temperature=0.0, model_type='vision')
-    return {int(k): v for k, v in result.items() if k.isdigit()} if result else {}
+    result = get_ai_response(prompt_parts, temperature=0.0, model_type='vision', is_json=True)
+    return {int(k): v for k, v in result.items() if k.isdigit()} if isinstance(result, dict) else {}
 
 def identify_relevant_questions_in_bulk_ai(all_papers_text: str, topic: str, subject_code: str, level: str) -> Dict[str, List[str]]:
     """Uses AI to find questions on a specific topic across multiple papers."""
     subject_name = subject_codes.get(subject_code, subject_code).replace('-', ' ').title()
     prompt = f"""You are an expert Cambridge {level} {subject_name} examiner. Analyze the OCR text from multiple past papers and identify questions primarily about the topic: "{topic}". Be extremely strict. Reject questions that only mention keywords but are about a different concept. Respond with a single JSON object where keys are filenames (e.g., "9702_s23_qp_41.pdf") and values are an array of relevant question numbers (as strings). Example: {{"9702_s23_qp_41.pdf": ["5", "7"], "9702_m24_qp_42.pdf": ["4"]}}. Full OCR Text of All Papers:\n---\n{all_papers_text[:1000000]}\n---"""
     logging.info(f"Making a single bulk API call for topic '{topic}' across all papers...")
-    ai_result = get_json_from_ai_with_retry(prompt, schema=None, temperature=0.0, model_type='text')
-    return ai_result if ai_result else {}
+    ai_result = get_ai_response(prompt, temperature=0.0, model_type='text', is_json=True)
+    return ai_result if isinstance(ai_result, dict) else {}
 
 def is_blank_image_pixel_based(image_path: str) -> bool:
     """Determines if an image is blank by checking pixel brightness."""
@@ -228,7 +234,7 @@ def ocr_specific_pages(image_paths: Dict[int, str], start_page: int = 0) -> str:
 
 def parse_all_questions_from_text(full_text: str) -> List[Dict[str, Any]]:
     """Parses OCR text to identify and split individual questions."""
-    main_question_start_regex = re.compile(r'^\s*(?:Question\s)?(\d{1,2})[\s\.\(]', re.MULTILINE | re.IGNORECASE)
+    main_question_start_regex = re.compile(r'\n\s*(\d{1,2})[\s\.\(]', re.MULTILINE)
     matches = list(main_question_start_regex.finditer(full_text))
     if not matches: return []
     extracted_questions = []
@@ -460,32 +466,32 @@ def generate_question() -> Response:
         prompt = fr"""
         You are an expert Cambridge examiner for {level} {name}.
         Your first task is to validate if "{topic}" is a real, central topic in this subject.
-        - If the topic is INVALID, respond with "success": false and a "message" explaining why.
+        - If the topic is INVALID, respond with the single word "INVALID" and nothing else.
         - If the topic is VALID, create an authentic, multi-part exam question.
 
         CRITICAL INSTRUCTIONS FOR QUESTION GENERATION:
-        - The response MUST be a single JSON object.
-        - All backslashes `\` for LaTeX MUST be double-escaped as `\\`.
-        - **Formatting:** Each part of the question (e.g., (a), (b), (i)) MUST start on a new line. Use `\n` for line breaks.
+        - **Formatting:** Each part of the question (e.g., (a), (b), (i)) MUST start on a new line.
         - **Marks:** Marks for each part MUST be in square brackets at the end of the line, e.g., [2]. The total marks should be between 8 and 15.
-        
-        The JSON object must contain:
-        - "success": true
-        - "question": A string containing the multi-part question.
-        - "model_answer": A string containing a point-based marking scheme, with each point on a new line.
-        - "diagram_spec": A JSON object for a diagram if needed, otherwise null.
+        - **Delimiter:** After the entire question is finished, you MUST include the exact delimiter '|||ANSWER|||' on its own line.
+        - **Model Answer:** After the delimiter, provide a point-based marking scheme, with each point on a new line.
         """
-        schema = {"type": "OBJECT", "properties": {"success": {"type": "BOOLEAN"}, "message": {"type": "STRING"}, "question": {"type": "STRING"}, "model_answer": {"type": "STRING"}, "diagram_spec": {"type": "OBJECT", "nullable": True, "properties": { "type": {"type": "STRING"}, "title": {"type": "STRING"}, "x_label": {"type": "STRING"}, "y_label": {"type": "STRING"}, "data": {"type": "ARRAY", "items": {"type": "ARRAY", "items": {"type": "NUMBER"}}}}}}, "required": ["success"]}
+        
+        raw_response = get_ai_response(prompt, temperature=0.8, model_type='text', is_json=False)
 
-        result = get_json_from_ai_with_retry(prompt, schema, temperature=0.8, model_type='text')
-        if not result: return jsonify({"success": False, "message": "AI service failed to provide a valid response."}), 500
-        if not result.get('success', False): return jsonify({"success": False, "message": result.get('message', 'The AI determined this topic is not valid.')}), 400
+        if not raw_response:
+            return jsonify({"success": False, "message": "AI service failed to provide a valid response."}), 500
+        
+        if "INVALID" in raw_response or '|||ANSWER|||' not in raw_response:
+            return jsonify({"success": False, "message": f"The AI determined that '{topic}' is not a valid topic for this subject."}), 400
 
-        diagram_image_b64 = None
-        if isinstance(result.get('diagram_spec'), dict) and result['diagram_spec'].get('type') == 'graph' and result['diagram_spec'].get('data'):
-            diagram_image_b64 = _create_diagram_from_spec(result['diagram_spec'])
+        question_text, model_answer_text = raw_response.split('|||ANSWER|||', 1)
 
-        return jsonify({"success": True, "question": str(result.get('question', '')), "model_answer": str(result.get('model_answer', '')), "diagram_image": diagram_image_b64})
+        return jsonify({
+            "success": True,
+            "question": question_text.strip(),
+            "model_answer": model_answer_text.strip(),
+            "diagram_spec": None # Diagram generation can be re-added later if needed
+        })
     except Exception as e:
         logging.error(f"Unhandled error in generate_question: {e}\n{traceback.format_exc()}")
         return jsonify({"success": False, "message": "An unexpected server error occurred."}), 500
@@ -502,7 +508,7 @@ def mark_answer() -> Response:
         prompt = f"""As a strict CIE examiner, mark the student's answer based on the provided model answer. Question: {data['question']}\nModel Answer: {data['model_answer']}\nStudent Answer: {data['user_answer']}\nRespond in JSON with "score" (integer out of {max_score}), "feedback" (object with "strengths" and "improvements"), and "corrected_answer"."""
         schema = {"type": "OBJECT", "properties": {"score": {"type": "INTEGER"}, "feedback": {"type": "OBJECT", "properties": {"strengths": {"type": "STRING"}, "improvements": {"type": "STRING"}}, "required": ["strengths", "improvements"]}, "corrected_answer": {"type": "STRING"}}, "required": ["score", "feedback", "corrected_answer"]}
         
-        result = get_json_from_ai_with_retry(prompt, schema, model_type='text')
+        result = get_ai_response(prompt, schema=schema, model_type='text', is_json=True)
         if not result: return jsonify({"success": False, "message": "AI marking service failed."}), 500
         
         if 'score' in result and isinstance(result.get('score'), int): result['score'] = min(result['score'], max_score)

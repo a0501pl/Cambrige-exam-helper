@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import 'katex/dist/katex.min.css';
 
 const BACKEND_URL = 'http://localhost:10000';
+//const BACKEND_URL = 'HTTP://127.0.0.1:5000';//
 
 class ErrorBoundary extends React.Component {
     constructor(props) { super(props); this.state = { hasError: false }; }
