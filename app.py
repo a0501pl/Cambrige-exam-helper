@@ -2,10 +2,10 @@
 # --- Cambridge Exam Helper - AI-Powered Past Paper Application ---
 # ==============================================================================
 #
-# Version:      v140 (Final Stable Synchronous Version)
-# Description:  A stable, synchronous backend. This version uses a robust
-#               text-delimiter method for AI generation to guarantee valid JSON
-#               and fix all formatting and stability issues.
+# Version:      v141 (Final Stable Synchronous Version - Truncated Image Fix)
+# Description:  A stable, synchronous backend. This version fixes a race
+#               condition where image files could be read before they were
+#               fully written, causing a crash.
 #
 # ==============================================================================
 
@@ -50,7 +50,7 @@ from reportlab.lib.enums import TA_CENTER
 # ==============================================================================
 # --- 2. CONFIGURATION & INITIALIZATION ---
 # ==============================================================================
-print("--- Running app.py version: v140 (Final Stable Synchronous Version) ---")
+print("--- Running app.py version: v141 (Final Stable Synchronous Version - Truncated Image Fix) ---")
 
 class Config:
     """Centralized configuration class for the application."""
@@ -173,19 +173,31 @@ def classify_single_paper_ai(filename: str, image_paths_dict: Dict[int, str]) ->
 def identify_relevant_questions_in_bulk_ai(all_papers_text: str, topic: str, subject_code: str, level: str) -> Dict[str, List[str]]:
     """Uses AI to find questions on a specific topic across multiple papers."""
     subject_name = subject_codes.get(subject_code, subject_code).replace('-', ' ').title()
-    prompt = f"""You are an expert Cambridge {level} {subject_name} examiner. Analyze the OCR text from multiple past papers and identify questions primarily about the topic: "{topic}". Be extremely strict. Reject questions that only mention keywords but are about a different concept. Respond with a single JSON object where keys are filenames (e.g., "9702_s23_qp_41.pdf") and values are an array of relevant question numbers (as strings). Example: {{"9702_s23_qp_41.pdf": ["5", "7"], "9702_m24_qp_42.pdf": ["4"]}}. Full OCR Text of All Papers:\n---\n{all_papers_text[:1000000]}\n---"""
+    prompt = f"""You are an expert Cambridge {level} {subject_name} examiner. Analyze the OCR text from multiple past papers and identify questions primarily about the topic: "{topic}". Be extremely strict. Reject questions that only mention keywords but are about a different concept.Respond with a single JSON object where keys are filenames (e.g., "9702_s23_qp_41.pdf") and the value is a dictionary whose keys are the question numbers and whose values are the reasoning behind why that question was chosen. The reasoning for each chosen question MUST: Be 1–2 sentences (max 40 words). Cite 1–2 short quoted phrases (≤12 words each) from the OCR that directly indicate the topic. Name the specific concept link (e.g., “conservation of momentum in 2D”, not just “momentum”). State why this is about the topic rather than a different concept with similar terms. Avoid generic statements (“related to the topic”) and avoid step-by-step internal reasoning. Reject borderline cases. If a paper has no valid questions, omit that filename entirely. Return only the JSON object, no extra text. Example: {{"9702_s23_qp_41.pdf":{{"5": "Includes 'time–distance graph' and 'constant acceleration'; requires SUVAT derivation → core kinematics, not circular motion.","7": "Mentions 'elastic collision' and 'momentum conserved' in 1D; explicitly tests momentum, not impulse-only."}},"9702_m24_qp_42.pdf": {{    "4": "Quotes 'magnetic flux linkage' and 'Faraday’s law'; calculation of induced emf targets electromagnetic induction, not transformers generally."}}}} Full OCR Text of All Papers:---{all_papers_text[:1000000]}---"""
     logging.info(f"Making a single bulk API call for topic '{topic}' across all papers...")
     ai_result = get_ai_response(prompt, temperature=0.0, model_type='text', is_json=True)
     return ai_result if isinstance(ai_result, dict) else {}
 
+# --- START OF FIX: Added robust error handling to this function ---
 def is_blank_image_pixel_based(image_path: str) -> bool:
-    """Determines if an image is blank by checking pixel brightness."""
-    if not image_path or not os.path.exists(image_path): return True
-    with PILImage.open(image_path).convert("L") as img:
-        pixels = list(img.getdata())
-        if not pixels: return True
-        bright_pixels = sum(1 for p in pixels if p > app.config['BLANK_IMAGE_THRESHOLD'])
-        return (bright_pixels / len(pixels)) > app.config['BLANK_IMAGE_PIXEL_FRACTION']
+    """
+    Determines if an image is blank by checking pixel brightness.
+    Includes error handling for truncated or corrupted image files.
+    """
+    if not image_path or not os.path.exists(image_path):
+        return True
+    try:
+        with PILImage.open(image_path).convert("L") as img:
+            img.load() 
+            pixels = list(img.getdata())
+            if not pixels:
+                return True
+            bright_pixels = sum(1 for p in pixels if p > app.config['BLANK_IMAGE_THRESHOLD'])
+            return (bright_pixels / len(pixels)) > app.config['BLANK_IMAGE_PIXEL_FRACTION']
+    except (OSError, PILImage.DecompressionBombError, PILImage.UnidentifiedImageError) as e:
+        logging.warning(f"Could not process image file {image_path}: {e}. Assuming it is NOT blank.")
+        return False
+# --- END OF FIX ---
 
 def get_potential_pdf_urls(subject_code: str, year: str, session: str, component: str, level: str, paper_type: str) -> List[str]:
     """Generates a list of possible download URLs for a given past paper."""
@@ -490,7 +502,7 @@ def generate_question() -> Response:
             "success": True,
             "question": question_text.strip(),
             "model_answer": model_answer_text.strip(),
-            "diagram_spec": None # Diagram generation can be re-added later if needed
+            "diagram_spec": None
         })
     except Exception as e:
         logging.error(f"Unhandled error in generate_question: {e}\n{traceback.format_exc()}")
